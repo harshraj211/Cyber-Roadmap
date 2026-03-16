@@ -753,3 +753,136 @@ function setPomoTopic(pi, ti) {
   const panel = document.getElementById("pomo-panel");
   if (!panel.classList.contains("open")) togglePomodoro();
 }
+// ══════════════════════════════════════════════
+// ML ENGINE INTEGRATIONS
+// ══════════════════════════════════════════════
+
+// ── Progress re-recommendation banner ──
+function checkProgressRecommendation() {
+  if (state.progressRecoShown) return;
+  const reco = ML_ENGINE.getProgressRecommendation();
+  if (!reco) return;
+
+  const banner = document.getElementById("preco-banner");
+  if (!banner) return;
+
+  document.getElementById("preco-icon").textContent   = reco.icon;
+  document.getElementById("preco-title").textContent  = `ML suggests: ${reco.name} (${reco.confidence}% match)`;
+  document.getElementById("preco-reason").textContent = reco.reason;
+  document.getElementById("preco-explore-btn").onclick = () => {
+    showToast(`Explore ${reco.name} at cybernav.vercel.app`, reco.icon, reco.color);
+    dismissProgressReco();
+  };
+  banner.style.display = "block";
+  state.progressRecoShown = true;
+  saveState();
+}
+
+function dismissProgressReco() {
+  document.getElementById("preco-banner").style.display = "none";
+}
+
+// ── Cert recommender (sidebar) ──
+function updateCertRecommender() {
+  const reco    = ML_ENGINE.getCertRecommendation();
+  const el      = document.getElementById("sb-cert-reco");
+  const content = document.getElementById("sb-cert-reco-content");
+  if (!reco?.length || !el || !content) return;
+
+  el.style.display = "block";
+  content.innerHTML = reco.map(({ cert, readiness, reasons }) => {
+    const color = readiness >= 70 ? "#34d399" : readiness >= 40 ? "#fbbf24" : "#60a5fa";
+    return `
+      <div class="cert-reco-item">
+        <div class="cert-reco-name">${cert.name}</div>
+        <div class="cert-reco-bar-wrap">
+          <div class="cert-reco-bar">
+            <div style="width:${readiness}%;height:100%;background:${color};border-radius:99px;transition:width .8s ease"></div>
+          </div>
+          <span class="cert-reco-pct" style="color:${color}">${readiness}%</span>
+        </div>
+        <div class="cert-reco-reasons">${reasons.slice(0,2).join(" · ")}</div>
+      </div>`;
+  }).join("");
+}
+
+// ── Phase quiz trigger button ──
+function triggerPhaseQuiz() {
+  const plan = getPlan(); if (!plan) return;
+  let targetPhase = -1;
+  for (let pi = plan.phases.length - 1; pi >= 0; pi--) {
+    const done = plan.phases[pi].topics.filter((_,ti) =>
+      state.progress?.[`${pi}:${ti}`] === "done"
+    ).length;
+    if (done >= 3) { targetPhase = pi; break; }
+  }
+  if (targetPhase < 0) {
+    showToast("Complete at least 3 topics in a phase first!", "🧠", "#fbbf24");
+    return;
+  }
+  WEEKLY_QUIZ.start(targetPhase);
+}
+
+// ── Override checkPhaseComplete to offer quiz on phase finish ──
+const _origCheckPhaseComplete = checkPhaseComplete;
+function checkPhaseComplete(pi) {
+  const plan = getPlan(); if (!plan) return;
+  const phase = plan.phases[pi];
+  const allDone = phase.topics.every((_,ti) =>
+    state.progress?.[key(pi,ti)] === "done" || state.progress?.[key(pi,ti)] === "skip"
+  );
+  if (!allDone || (state.lastMilestone||0) >= pi+1) return;
+
+  state.lastMilestone = pi + 1;
+  const xpReward = 200 + pi * 100;
+  state.xp += xpReward;
+  saveState();
+
+  document.getElementById("boss-emoji").textContent = phase.icon;
+  document.getElementById("boss-title").textContent = `${phase.name} Complete!`;
+  document.getElementById("boss-msg").innerHTML = `
+    You finished <strong>${phase.label}</strong>.<br/>
+    <button class="btn-ac" style="margin-top:12px;font-size:12px"
+      onclick="closeModal('boss-modal');setTimeout(()=>WEEKLY_QUIZ.start(${pi}),300)">
+      🧠 Take Phase Quiz (+${5*25} bonus XP)
+    </button>`;
+  document.getElementById("boss-xp").textContent = `+${xpReward} XP`;
+  document.getElementById("boss-modal").classList.add("show");
+  launchConfetti(); SFX.play("rank");
+}
+
+// ── Override renderAll to run ML checks ──
+const _origRenderAll = renderAll;
+function renderAll() {
+  renderTodayHero();
+  renderStats();
+  renderXpBar();
+  renderPhases();
+  renderResources();
+  renderCerts();
+  renderCareer();
+  renderStatsSection();
+  renderExamCountdown();
+
+  // ML features
+  updateCertRecommender();
+  checkProgressRecommendation();
+
+  // Show phase quiz button when enough topics are done
+  const plan = getPlan();
+  const quizBtn = document.getElementById("btn-phase-quiz");
+  if (quizBtn && plan) {
+    const hasEnough = plan.phases.some((phase, pi) =>
+      phase.topics.filter((_,ti) => state.progress?.[`${pi}:${ti}`] === "done").length >= 3
+    );
+    quizBtn.style.display = hasEnough ? "inline-flex" : "none";
+  }
+}
+
+// ── Save quiz answers to state (used by progress re-reco) ──
+const _origShowMLResult = showMLResult;
+function showMLResult(result, answers) {
+  state.quizAnswers = answers;
+  saveState();
+  _origShowMLResult(result, answers);
+}

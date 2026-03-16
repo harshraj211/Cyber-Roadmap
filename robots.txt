@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://cyber-roadmap-seven.vercel.app//sitemap.xml
+Sitemap: https://cyber-roadmap-seven.vercel.app/sitemap.xml
